@@ -1,5 +1,5 @@
 import os
-from pprint import pprint
+import time
 
 import cplex
 import numpy as np
@@ -7,30 +7,73 @@ import numpy as np
 
 class Simplex:
     def __init__(self, filename: str, verbose=False):
-
-        self.cpx = cplex.Cplex(os.path.join(os.getcwd(), filename))
+        self.original_cpx = cplex.Cplex(os.path.join(os.getcwd(), filename))
+        self.start_time = time.time()
+        self.end_time = time.time()
+        self.cpx = self.get_auxiliary_problem(filename)
         self.sense = self.cpx.objective.sense[self.cpx.objective.get_sense()]
         self.iter = 0
-        self.A = self.b = self.c = np.empty(0)
+        self.A = self.b = self.c = np.zeros(0)
         self.__initialize_matrices()
         self.verbose = verbose
         self.optimal = False
         self.optimal_value = None
         self.feasible = True
         self.bounded = False
-        self.x = np.array(0)
+        self.x = np.zeros(0)
         self.MAX_ITERATIONS = 10 ** 5
         self.int_max = float('inf')
 
+    def get_auxiliary_problem(self, filename) -> cplex.Cplex:
+        cpx = cplex.Cplex(os.path.join(os.getcwd(), filename))
+        num_constraints = cpx.linear_constraints.get_num()
+        num_slack = 0
+        if cpx.objective.sense[cpx.objective.get_sense()] == 'minimize':
+            cpx.objective.set_sense(cpx.objective.sense.maximize)
+            c = cpx.objective.get_linear()
+            cpx.objective.set_linear([(i, -1 * c[i]) for i in range(len(c))])
+
+        for i in range(num_constraints):
+            lc = cpx.linear_constraints.get_rows(i)
+            lc_name = cpx.linear_constraints.get_names(i)
+            rhs = cpx.linear_constraints.get_rhs(i)
+            sense = cpx.linear_constraints.get_senses(i)
+
+            if rhs < 0:
+                new_sp = cplex.SparsePair(ind=lc.unpack()[0], val=[-1 * i for i in lc.unpack()[1]])
+                cpx.linear_constraints.set_linear_components(lc_name, new_sp)
+                cpx.linear_constraints.set_rhs(lc_name, -1 * rhs)
+                if sense == 'L':
+                    cpx.linear_constraints.set_senses(lc_name, 'G')
+                elif sense == 'G':
+                    cpx.linear_constraints.set_senses(lc_name, 'L')
+
+            sense = cpx.linear_constraints.get_senses(i)
+            if sense == 'L':
+                num_slack += 1
+                slack_name = f's{num_slack}'
+                cpx.variables.add(obj=[0], lb=[0], ub=[cplex.infinity], names=[slack_name])
+                cpx.linear_constraints.set_coefficients(lc_name, slack_name, 1)
+            elif sense == 'G':
+                num_slack += 1
+                slack_name = f's{num_slack}'
+                cpx.variables.add(obj=[0], lb=[0], ub=[cplex.infinity], names=[slack_name])
+                cpx.linear_constraints.set_coefficients(lc_name, slack_name, -1)
+        return cpx
+
     def cplex_solver(self):
+        start_time = time.time()
         self.cpx.set_problem_type(self.cpx.problem_type.LP)
-        self.cpx.solve()
         self.cpx.parameters.lpmethod.set(self.cpx.parameters.lpmethod.values.primal)
-        print(self.cpx.solution.get_objective_value())
+        self.cpx.solve()
         print(self.cpx.solution.status[self.cpx.solution.get_status()])
+        if self.cpx.solution.status == 'feasible':
+            print(self.cpx.solution.get_objective_value())
+        end_time = time.time()
+        print(end_time-start_time)
 
     def print_tableau(self, tableau):
-        pprint(tableau)
+        print(tableau)
 
     def __initialize_matrices(self):
         # The Linear Constraints come in SparsePair format
@@ -38,11 +81,12 @@ class Simplex:
 
         num_constraints = self.cpx.linear_constraints.get_num()
         num_variables = self.cpx.variables.get_num()
-        A = np.empty((num_constraints, num_variables))
+        A = np.zeros((num_constraints, num_variables), dtype='float')
         b = np.array(self.cpx.linear_constraints.get_rhs())
         c = np.array(self.cpx.objective.get_linear())
         i = 0
         for constraint in linear_constraints:
+            # print(constraint)
             # Using the indices and the corresponding values from SparsePair to populate a row
             indices = constraint.unpack()[0]
             values = constraint.unpack()[1]
@@ -52,11 +96,12 @@ class Simplex:
                 k += 1
             i += 1
 
-        if self.sense == 'minimize':
-            c = -1 * c
         self.A = A
         self.b = b
         self.c = c
+        print(self.A)
+        print(self.b)
+        print(self.c)
 
     def create_tableau_phase_1(self) -> np.array:
         num_variables = len(self.c)  # size of coefficient matrix c from objective function
@@ -67,7 +112,7 @@ class Simplex:
         # The second element - Current cost (initialized = 0)
         # Followed by cost function coefficients including artificial variables.
         # t1 = np.hstack(([None], [0], [0] * num_variables, [0] * num_artificial))  # Top row
-        t1 = np.hstack(([None], [0], -1 * self.c, [0] * num_artificial))  # Top row
+        t1 = np.hstack(([None], [0], [0] * num_variables, [0] * num_artificial))  # Top row
         basis = np.array([0] * num_artificial)
         for i in range(0, len(basis)):
             basis[i] = num_variables + i
@@ -77,12 +122,12 @@ class Simplex:
             A = np.hstack((self.A, B))
         t2 = np.hstack((np.transpose([basis]), np.transpose([self.b]), A))
         tableau = np.vstack((t1, t2))
-        # for i in range(1, len(tableau[0]) - num_artificial):
-        #     for j in range(1, len(tableau)):
-        #         if self.sense == "minimize":
-        #             tableau[0, i] -= tableau[j, i]
-        #         else:
-        #             tableau[0, i] += tableau[j, i]
+        for i in range(1, len(tableau[0]) - num_artificial):
+            for j in range(1, len(tableau)):
+                if self.sense == "minimize":
+                    tableau[0, i] += tableau[j, i]
+                else:
+                    tableau[0, i] -= tableau[j, i]
         tableau = np.array(tableau, dtype='float')
         return tableau
 
@@ -93,7 +138,7 @@ class Simplex:
 
         tableau[0, 1] = 0
 
-        a = np.empty(0)
+        a = np.zeros(0)
         for value in tableau[0, 1:]:
             a = np.append(a, value)
 
@@ -146,34 +191,19 @@ class Simplex:
 
         return tableau
 
-    def solve_1_phase(self):
+    def solve(self):
         tableau = self.create_tableau_phase_1()
         print("Phase 1:\n")
         tableau = self.simplex(tableau)
 
         if not self.bounded:
-            return
-
-        self.x = np.array([0] * len(self.c), dtype=float)
-
-        # save coefficients
-        for key in range(1, (len(tableau))):
-            if tableau[key, 0] < len(self.c):
-                self.x[int(tableau[key, 0])] = tableau[key, 1]
-
-        self.optimal_value = tableau[0, 1]
-
-    def solve_2_phase(self):
-        tableau = self.create_tableau_phase_1()
-        print("Phase 1:\n")
-        tableau = self.simplex(tableau)
-
-        if not self.bounded:
+            self.end_time = time.time()
             return
 
         if tableau[0, 1] != 0:
             self.feasible = False
             print("Problem Infeasible; No Solution")
+            self.end_time = time.time()
             return
 
         print("Phase 2:\n")
@@ -185,6 +215,7 @@ class Simplex:
         tableau = self.simplex(tableau)
 
         if not self.bounded:
+            self.end_time = time.time()
             return
 
         self.x = np.array([0] * len(self.c), dtype=float)
@@ -194,15 +225,17 @@ class Simplex:
             if tableau[key, 0] < len(self.c):
                 self.x[int(tableau[key, 0])] = tableau[key, 1]
 
-        self.optimal_value = -1 * tableau[0, 1]
+        self.optimal_value = tableau[0, 1]
+        self.end_time = time.time()
 
     def print_solution(self):
+        print(self.end_time - self.start_time)
         if self.feasible:
             if self.bounded:
                 print("Coefficients: ")
                 print(self.x)
                 print("Optimal value: ")
-                pprint(self.optimal_value)
+                print(self.optimal_value)
             else:
                 print("Problem Unbounded; No Solution")
         else:
@@ -244,7 +277,7 @@ class Simplex:
 
             self.bounded = False
             for element in tableau[1:, pivot_col]:
-                if element != 0:
+                if element > 0:
                     self.bounded = True
 
             if not self.bounded:
@@ -282,14 +315,14 @@ class Simplex:
         for i in range(0, len(tableau)):
             if i != pivot_row:
                 mult = tableau[i, pivot_col] / tableau[pivot_row, pivot_col]
-                tableau[i, 1:] = tableau[i, 1:] - mult * tableau[pivot_row, 1:]
+                tableau[i, 1:] = np.round(tableau[i, 1:] - mult * tableau[pivot_row, 1:], 14)
 
         return tableau
 
 
 def main():
-    simplex = Simplex(filename='test1.lp', verbose=True)
-    simplex.solve_1_phase()
+    simplex = Simplex(filename='test3.lp', verbose=True)
+    simplex.solve()
     simplex.print_solution()
 
     simplex.cplex_solver()
