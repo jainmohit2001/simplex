@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 
 import cplex
@@ -321,11 +322,18 @@ class Simplex:
 
 
 def main():
-    simplex = Simplex(filename='test3.lp', verbose=True)
-    simplex.solve()
-    simplex.print_solution()
+    if len(sys.argv) != 2:
+        sys.exit("Please enter the test filename in the command line as follows: \n\t > python main.y filename.lp")
+    filename = sys.argv[1]
+    try:
+        simplex = Simplex(filename=filename, verbose=True)
+        simplex.solve()
+        simplex.print_solution()
+        simplex.cplex_solver()
+    except Exception as e:
+        print(e)
+        sys.exit("Some Error occurred")
 
-    simplex.cplex_solver()
 
 
 if __name__ == '__main__':
