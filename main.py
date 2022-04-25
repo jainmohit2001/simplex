@@ -68,10 +68,12 @@ class Simplex:
         self.cpx.parameters.lpmethod.set(self.cpx.parameters.lpmethod.values.primal)
         self.cpx.solve()
         print(self.cpx.solution.status[self.cpx.solution.get_status()])
-        if self.cpx.solution.status == 'feasible':
+        try:
             print(self.cpx.solution.get_objective_value())
+        except Exception as e:
+            print("No solution")
         end_time = time.time()
-        print(end_time-start_time)
+        print(end_time - start_time)
 
     def print_tableau(self, tableau):
         print(tableau)
@@ -114,6 +116,7 @@ class Simplex:
         # Followed by cost function coefficients including artificial variables.
         # t1 = np.hstack(([None], [0], [0] * num_variables, [0] * num_artificial))  # Top row
         t1 = np.hstack(([None], [0], [0] * num_variables, [0] * num_artificial))  # Top row
+        t2 = np.hstack(([None], [0], -1 * self.c, [0] * num_artificial))
         basis = np.array([0] * num_artificial)
         for i in range(0, len(basis)):
             basis[i] = num_variables + i
@@ -121,10 +124,10 @@ class Simplex:
         if not ((num_artificial + num_variables) == len(self.A[0])):
             B = np.identity(num_artificial)
             A = np.hstack((self.A, B))
-        t2 = np.hstack((np.transpose([basis]), np.transpose([self.b]), A))
-        tableau = np.vstack((t1, t2))
+        t3 = np.hstack((np.transpose([basis]), np.transpose([self.b]), A))
+        tableau = np.vstack((t1, t2, t3))
         for i in range(1, len(tableau[0]) - num_artificial):
-            for j in range(1, len(tableau)):
+            for j in range(2, len(tableau)):
                 if self.sense == "minimize":
                     tableau[0, i] += tableau[j, i]
                 else:
@@ -134,23 +137,7 @@ class Simplex:
 
     def get_tableau_phase2(self, tableau):
         self.print_tableau(tableau)
-        for i in range(0, len(self.c) - 1):
-            tableau[0, i + 2] = self.c[i]
-
-        tableau[0, 1] = 0
-
-        a = np.zeros(0)
-        for value in tableau[0, 1:]:
-            a = np.append(a, value)
-
-        for j in range(1, len(tableau)):
-            for i in range(1, len(tableau[0])):
-                if self.sense == "minimum":
-                    a[i - 1] -= tableau[0, int(tableau[j, 0] + 2)] * tableau[j, i]
-                else:
-                    a[i - 1] += tableau[0, int(tableau[j, 0] + 2)] * tableau[j, i]
-
-        tableau[0, 1:] = a
+        tableau = np.delete(tableau, obj=[0], axis=0)
 
         return tableau
 
@@ -162,14 +149,13 @@ class Simplex:
         tableau = np.delete(tableau, obj=np.s_[2 + len(self.c):], axis=1)
 
         # redundant row removal
-        for i in range(1, len(tableau)):
+        for i in range(2, len(tableau)):
             if tableau[i, 0] > len(self.c) - 1:
 
                 redundant = True
                 for j in range(2, len(self.c) + 2):
                     if tableau[i, j] != 0:
                         redundant = False
-                        av_ind.append([i, False])
                         break
                 av_ind.append([i, redundant])
 
@@ -181,7 +167,6 @@ class Simplex:
             index, redundant = key
             if redundant:
                 tableau = np.delete(tableau, obj=index, axis=0)
-                av_ind.remove(key)
             else:
                 pivot_col = -1
                 for i in range(2, len(tableau[0]) - 1):
@@ -189,7 +174,7 @@ class Simplex:
                         pivot_col = i
                         break
                 tableau = self.pivot_on(tableau, index, pivot_col)
-
+                tableau[index, 0] = pivot_col - 2
         return tableau
 
     def solve(self):
@@ -201,7 +186,7 @@ class Simplex:
             self.end_time = time.time()
             return
 
-        if tableau[0, 1] != 0:
+        if round(tableau[0, 1],8) != 0:
             self.feasible = False
             print("Problem Infeasible; No Solution")
             self.end_time = time.time()
@@ -212,8 +197,10 @@ class Simplex:
         tableau = self.drive_out_av(tableau)
 
         tableau = self.get_tableau_phase2(tableau)
-
-        tableau = self.simplex(tableau)
+        for i in range(len(tableau)):
+            for j in range(len(tableau[0])):
+                tableau[i][j] = round(tableau[i][j], 8)
+        tableau = self.simplex2(tableau)
 
         if not self.bounded:
             self.end_time = time.time()
@@ -256,13 +243,79 @@ class Simplex:
 
             if self.sense == 'maximum':
                 for i in tableau[0, 2:]:
-                    if i > 0:
+                    if round(i,8) > 0:
                         self.optimal = False
                         break
                     self.optimal = True
             else:
                 for i in tableau[0, 2:]:
-                    if i < 0:
+                    if round(i,8) < 0:
+                        self.optimal = False
+                        break
+                    self.optimal = True
+
+            if self.optimal:
+                break
+            if self.iter > self.MAX_ITERATIONS:
+                break
+            if self.sense == 'minimum':
+                pivot_col = tableau[0, 2:].tolist().index(np.amax(tableau[0, 2:])) + 2
+            else:
+                pivot_col = tableau[0, 2:].tolist().index(np.amin(tableau[0, 2:])) + 2
+
+            self.bounded = False
+            for element in tableau[2:, pivot_col]:
+                if round(element,8) > 0:
+                    self.bounded = True
+
+            if not self.bounded:
+                print("Unbounded; No solution.")
+                return
+
+            minimum = float('inf')
+            pivot_row = -1
+            for i in range(2, len(tableau)):
+                if tableau[i, pivot_col] > 0:
+                    val = tableau[i, 1] / tableau[i, pivot_col]
+                    if round(val,8) < round(minimum,8):
+                        minimum = val
+                        pivot_row = i
+
+            pivot_element = round(tableau[pivot_row, pivot_col],8)
+
+            if self.verbose:
+                print("Pivot Column:", pivot_col)
+                print("Pivot Row:", pivot_row)
+                print("Pivot Element: ", pivot_element)
+                print("Entering variable " + str(pivot_col - 1))
+                print("Leaving variable " + str(int(tableau[pivot_row, 0] + 1)))
+
+            tableau = self.pivot_on(tableau, pivot_col=pivot_col, pivot_row=pivot_row)
+            tableau[pivot_row, 0] = pivot_col - 2
+            self.iter += 1
+        return tableau
+
+    def simplex2(self, tableau) -> np.array:
+        if self.verbose:
+            print("Starting Tableau")
+            self.print_tableau(tableau)
+
+        self.iter = 1
+
+        while 1:
+            if self.verbose:
+                print(f"---- Iteration : {self.iter}")
+                self.print_tableau(tableau)
+
+            if self.sense == 'maximum':
+                for i in tableau[0, 1:]:
+                    if round(i, 8) > 0:
+                        self.optimal = False
+                        break
+                    self.optimal = True
+            else:
+                for i in tableau[0, 1:]:
+                    if round(i, 8) < 0:
                         self.optimal = False
                         break
                     self.optimal = True
@@ -278,7 +331,7 @@ class Simplex:
 
             self.bounded = False
             for element in tableau[1:, pivot_col]:
-                if element > 0:
+                if round(element, 8) > 0:
                     self.bounded = True
 
             if not self.bounded:
@@ -290,11 +343,11 @@ class Simplex:
             for i in range(1, len(tableau)):
                 if tableau[i, pivot_col] > 0:
                     val = tableau[i, 1] / tableau[i, pivot_col]
-                    if val < minimum:
+                    if round(val, 8) < round(minimum, 8):
                         minimum = val
                         pivot_row = i
 
-            pivot_element = tableau[pivot_row, pivot_col]
+            pivot_element = round(tableau[pivot_row, pivot_col], 8)
 
             if self.verbose:
                 print("Pivot Column:", pivot_col)
@@ -308,8 +361,10 @@ class Simplex:
             self.iter += 1
         return tableau
 
+
     def pivot_on(self, tableau, pivot_row, pivot_col) -> np.array:
-        pivot = tableau[pivot_row, pivot_col]
+        pivot = round(tableau[pivot_row, pivot_col], 8)
+        print("pivoting with (%s,%s) and value=%s" % (pivot_row, pivot_col, pivot))
         tableau[pivot_row, 1:] = tableau[pivot_row, 1:] / pivot
 
         # pivot other rows
@@ -317,7 +372,6 @@ class Simplex:
             if i != pivot_row:
                 mult = tableau[i, pivot_col] / tableau[pivot_row, pivot_col]
                 tableau[i, 1:] = np.round(tableau[i, 1:] - mult * tableau[pivot_row, 1:], 14)
-
         return tableau
 
 
@@ -326,14 +380,13 @@ def main():
         sys.exit("Please enter the test filename in the command line as follows: \n\t > python main.y filename.lp")
     filename = sys.argv[1]
     try:
-        simplex = Simplex(filename=filename, verbose=True)
+        simplex = Simplex(filename=filename, verbose=False)
         simplex.solve()
         simplex.print_solution()
         simplex.cplex_solver()
     except Exception as e:
         print(e)
         sys.exit("Some Error occurred")
-
 
 
 if __name__ == '__main__':

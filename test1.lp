@@ -1,7 +1,8 @@
 Maximize
- obj: x1 + 2 x2 + 3 x3
+ obj: 750x1 + 900x2 - 450x3
 Subject To
- c1: - x1 + x2 + x3 + 10 x4 <= 20
- c2: x1 - 3 x2 + x3 <= 30
- c3: x2 - 3.5 x4 <= 0
+ c1: x1 + 2x2 <= 70
+ c2: 2x1 + 3x2 - x3 <= 100
+ c3: x1 >= 20
+ c4: x2 >= 25
 End
