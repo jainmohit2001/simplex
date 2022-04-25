@@ -328,7 +328,7 @@ class Simplex:
             minimum = float('inf')
             pivot_row = -1
             for i in range(starting_row, len(tableau)):
-                if tableau[i, pivot_col] > 0:
+                if round(tableau[i, pivot_col],8) > 0:
                     val = tableau[i, 1] / tableau[i, pivot_col]
                     if round(val, 8) < round(minimum, 8):
                         minimum = val
@@ -372,7 +372,6 @@ def main():
         python main.py test2.lp -v
     """
     filename = sys.argv[1]
-    print(sys.argv)
     verbose = '-v' in sys.argv
     try:
         simplex = Simplex(filename=filename, verbose=verbose)
