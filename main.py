@@ -15,7 +15,6 @@ class Simplex:
         Usage:
             simplex = Simplex(filename='input.lp', verbose=False)
             simplex.solve()
-            simplex.print_solution()
         """
         self.verbose = verbose
         self.start_time = time.time()
