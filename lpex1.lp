@@ -1,8 +1,6 @@
-Maximize
- obj1: x1 + 2 x2 + 3 x3
+Minimize
+ obj: 5x1 + 2x2 + 10x3
 Subject To
- c1: - x1 + x2 + x3 <= 20
- c2: x1 - 3 x2 + x3 <= 30
-Bounds
- 0 <= x1 <= 40
+ c1: x1 - x3 + x4 = 10
+ c2: x2 + x3 - x5 = 10
 End
